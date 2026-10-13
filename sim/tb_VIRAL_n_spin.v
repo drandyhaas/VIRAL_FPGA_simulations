@@ -9,6 +9,9 @@
 //      and the LEDs against that energy >>> LED_LSB, saturated to 8 bits
 //   3. final spins against a floating-point model of the same dynamics
 //   4. that a reset reloads the initial state (a second run gives the same result)
+//
+// GAMMA_LO, if nonzero, replaces the low 16 bits of every gamma from angle_lut
+// (whose entries all have zero low bits), to test the full 32-bit gamma.
 
 module tb_VIRAL_n_spin;
 
@@ -17,6 +20,7 @@ parameter N_LAYERS  = 2;
 parameter INIT_FILE = "build/spin_init_10.hex";
 parameter LED_LSB   = 8;
 parameter FLOAT_TOL = 0.01;
+parameter GAMMA_LO  = 0;
 
 localparam PI = 3.141592653589793;
 
@@ -36,13 +40,16 @@ VIRAL_n_spin #(.N_SPINS(N_SPINS), .N_LAYERS(N_LAYERS), .INIT_FILE(INIT_FILE), .L
 // ---------------------------------------------------------------
 
 reg [1:0] lut_addr = 2'd0;
-wire signed [15:0] lut_gamma;
+wire signed [31:0] lut_gamma;
 wire signed [31:0] lut_beta;
 
-angle_lut lut (.clk(clk), .address(lut_addr), .alpha_out(lut_gamma), .beta_out(lut_beta));
+angle_lut lut (.clk(clk), .address(lut_addr), .alpha_out(), .gamma_out(lut_gamma), .beta_out(lut_beta));
 
-reg signed [15:0] gamma_tab [0:3];
+reg signed [31:0] gamma_tab [0:3];
 reg signed [31:0] beta_tab  [0:3];
+
+// gamma as seen by the design, with GAMMA_LO in the low bits
+wire signed [31:0] gamma_forced = gamma_tab[dut.angle_addr];
 
 
 // ---------------------------------------------------------------
@@ -118,9 +125,10 @@ task ref_layer;
 			s_sum = s_sum + ref_z[i];
 
 		for (i = 0; i < N_SPINS; i = i + 1) begin
+			// angle = gamma * h * 180 degrees, rounded: Q1.31 * Q1.15 >> 15
 			h    = s_sum - ref_z[i];
-			prod = gamma_tab[k] * h;
-			ref_angle_in[32*i +: 32] = {prod[30:0], 1'b0};
+			prod = (gamma_tab[k] * h + 64'sd16384) >>> 15;
+			ref_angle_in[32*i +: 32] = prod[31:0];
 			ref_x_in[16*i +: 16]     = ref_x[i];
 			ref_y_in[16*i +: 16]     = ref_y[i];
 			ref_z_in[16*i +: 16]     = ref_z[i];
@@ -149,7 +157,7 @@ endtask
 task float_layer;
 	input integer k;
 	begin
-		fg = gamma_tab[k] / 32768.0;
+		fg = gamma_tab[k] / 2147483648.0;
 		fb = beta_tab[k] * 2.0 * PI / 4294967296.0;
 
 		fs = 0.0;
@@ -186,7 +194,11 @@ initial begin
 		@(posedge clk);
 		gamma_tab[i] = lut_gamma;
 		beta_tab[i]  = lut_beta;
+		if (GAMMA_LO != 0)
+			gamma_tab[i][15:0] = GAMMA_LO;
 	end
+	if (GAMMA_LO != 0)
+		force dut.gamma = gamma_forced;
 
 	repeat (2) @(posedge clk);
 	reset = 1'b1;
@@ -262,8 +274,8 @@ initial begin
 		end
 	end
 
-	$display("N_SPINS=%0d N_LAYERS=%0d: %0d clocks, energy %0d (%f), led %b, float model max error %f",
-		N_SPINS, N_LAYERS, dut.final_time, $signed(dut.total_energy),
+	$display("N_SPINS=%0d N_LAYERS=%0d GAMMA_LO=%h: %0d clocks, energy %0d (%f), led %b, float model max error %f",
+		N_SPINS, N_LAYERS, GAMMA_LO[15:0], dut.final_time, $signed(dut.total_energy),
 		$signed(dut.total_energy) / 32768.0, led, max_err);
 
 	if (errors == 0)

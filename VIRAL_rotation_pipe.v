@@ -26,8 +26,8 @@ module VIRAL_rotation_pipe #(
 // (about z by local_z_hz_gamma, then about x by global_x_beta), built from
 // two chained pipelined CORDICs, so it accepts a new spin every clock.
 //
-// Latency: 34 clocks. in_tag (e.g. the spin index) comes out with the result.
-// global_x_beta is used 17 clocks after a spin enters, so it must be held
+// Latency: 36 clocks. in_tag (e.g. the spin index) comes out with the result.
+// global_x_beta is used 18 clocks after a spin enters, so it must be held
 // constant while spins are in flight (it is constant within a layer).
 
 wire                    z_done;

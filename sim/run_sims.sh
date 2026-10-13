@@ -17,7 +17,8 @@ for f in VIRAL_rotation_2 VIRAL_two_spin_2 VIRAL_three_spin; do
 done
 
 SRC="../angle_lut.v ../cordic_iterative.v ../cordic_pipelined.v \
-     build/VIRAL_rotation_2.v ../VIRAL_rotation_pipe.v ../spin_memory.v ../VIRAL_n_spin.v"
+     build/VIRAL_rotation_2.v ../VIRAL_rotation_pipe.v ../spin_memory.v \
+     ../serial_mult.v ../VIRAL_n_spin.v"
 
 echo "=== new design vs original two- and three-spin designs ==="
 python3 ../gen_spin_init.py 2 -o build/spin_init_2.hex
@@ -26,15 +27,16 @@ iverilog -g2005 -o build/tb_compare_original \
 vvp -n build/tb_compare_original
 
 run_n_spin() {
-	n=$1; layers=$2; pattern=$3; tol=${4:-0.01}
+	n=$1; layers=$2; pattern=$3; tol=${4:-0.01}; gamma_lo=${5:-0}
 	init="build/spin_init_${n}_${pattern}.hex"
-	echo "--- $n spins, $layers layers, $pattern initial state"
+	echo "--- $n spins, $layers layers, $pattern initial state, gamma low bits $gamma_lo"
 	python3 ../gen_spin_init.py "$n" --pattern "$pattern" -o "$init"
 	iverilog -g2005 -o "build/tb_n_spin_${n}" \
 		-Ptb_VIRAL_n_spin.N_SPINS="$n" \
 		-Ptb_VIRAL_n_spin.N_LAYERS="$layers" \
 		-Ptb_VIRAL_n_spin.INIT_FILE="\"$init\"" \
 		-Ptb_VIRAL_n_spin.FLOAT_TOL="$tol" \
+		-Ptb_VIRAL_n_spin.GAMMA_LO="$gamma_lo" \
 		$SRC tb_VIRAL_n_spin.v
 	vvp -n "build/tb_n_spin_${n}"
 }
@@ -50,6 +52,11 @@ run_n_spin 100 2 alternating
 # the float model drifts more for many spins: the z rotation angle is
 # proportional to the field, which grows with N
 run_n_spin 1000 2 random 0.05
+# full 32-bit gamma: low bits set (on all 4 layers with 4 layers; the last
+# two angle_lut entries are gamma = 0, so there gamma is just the low bits)
+run_n_spin 10   4 alternating 0.01 4660
+run_n_spin 100  4 random      0.01 43981
+run_n_spin 1000 2 random      0.05 4660
 
 echo
 echo "=== original architecture scaled to N spins (synth/VIRAL_n_spin_direct.v) vs new ==="

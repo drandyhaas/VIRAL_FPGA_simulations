@@ -9,7 +9,7 @@
 // iteration has its own pipeline stage, so a new vector can be
 // started every clock.
 //
-// Latency: 17 clocks from in_valid to out_valid.
+// Latency: 18 clocks from in_valid to out_valid.
 // in_tag is carried along unchanged and comes out with its result.
 // ================================================================
 
@@ -103,6 +103,11 @@ module cordic_pipelined #(
     // SIGN EXTEND AND CORDIC GAIN COMPENSATION
     //
     // 1/K ~= 0.607253 ~= 1/2 + 1/8 - 1/64 - 1/512
+    //
+    // Split over two clocks: stage 1 registers the two partial sums
+    // (Xin_extended/2 + Xin_extended/8 and Xin_extended/64 + Xin_extended/512),
+    // stage 2 subtracts them while folding the quadrant. All arithmetic is
+    // mod 2^17, so the result is the same as the four-term sum.
     // ============================================================
 
     wire signed [16:0] Xin_extended;
@@ -111,20 +116,13 @@ module cordic_pipelined #(
     assign Xin_extended = {Xin_reg[15], Xin_reg};
     assign Yin_extended = {Yin_reg[15], Yin_reg};
 
-    wire signed [16:0] Xin_scaled;
-    wire signed [16:0] Yin_scaled;
-
-    assign Xin_scaled =
-          (Xin_extended >>> 1)
-        + (Xin_extended >>> 3)
-        - (Xin_extended >>> 6)
-        - (Xin_extended >>> 9);
-
-    assign Yin_scaled =
-          (Yin_extended >>> 1)
-        + (Yin_extended >>> 3)
-        - (Yin_extended >>> 6)
-        - (Yin_extended >>> 9);
+    reg                    valid_1;
+    reg [TAG_WIDTH-1:0]    tag_1;
+    reg signed [31:0]      angle_1;
+    reg signed [16:0]      Xs_add;		// Xin_scaled = Xs_add - Xs_sub
+    reg signed [16:0]      Xs_sub;
+    reg signed [16:0]      Ys_add;		// Yin_scaled = Ys_add - Ys_sub
+    reg signed [16:0]      Ys_sub;
 
 
     // ============================================================
@@ -206,6 +204,7 @@ module cordic_pipelined #(
         if (!reset_in) begin
 
             in_valid_reg <= 1'b0;
+            valid_1      <= 1'b0;
             valid_p      <= {N_ITER{1'b0}};
             out_valid    <= 1'b0;
 
@@ -214,7 +213,8 @@ module cordic_pipelined #(
         else begin
 
             in_valid_reg <= in_valid;
-            valid_p      <= {valid_p[N_ITER-2:0], in_valid_reg};
+            valid_1      <= in_valid_reg;
+            valid_p      <= {valid_p[N_ITER-2:0], valid_1};
             out_valid    <= valid_p[N_ITER-1];
 
         end
@@ -234,37 +234,46 @@ module cordic_pipelined #(
         Yin_reg    <= Yin;
         angle_reg  <= angle;
 
-        // stage 1: gain compensation and quadrant folding
-        tag_p[0] <= in_tag_reg;
+        // stage 1: gain compensation, partial sums
+        tag_1   <= in_tag_reg;
+        angle_1 <= angle_reg;
+        Xs_add  <= (Xin_extended >>> 1) + (Xin_extended >>> 3);
+        Xs_sub  <= (Xin_extended >>> 6) + (Xin_extended >>> 9);
+        Ys_add  <= (Yin_extended >>> 1) + (Yin_extended >>> 3);
+        Ys_sub  <= (Yin_extended >>> 6) + (Yin_extended >>> 9);
+
+        // stage 2: finish gain compensation and fold the quadrant
+        // (-Yin_scaled = Ys_sub - Ys_add, and likewise for X)
+        tag_p[0] <= tag_1;
 
         if (
-            angle_reg[31:30] == 2'b00 ||
-            angle_reg[31:30] == 2'b11
+            angle_1[31:30] == 2'b00 ||
+            angle_1[31:30] == 2'b11
         ) begin
 
-            X_p[0] <= Xin_scaled;
-            Y_p[0] <= Yin_scaled;
-            Z_p[0] <= angle_reg;
+            X_p[0] <= Xs_add - Xs_sub;
+            Y_p[0] <= Ys_add - Ys_sub;
+            Z_p[0] <= angle_1;
 
         end
 
-        else if (angle_reg[31:30] == 2'b01) begin
+        else if (angle_1[31:30] == 2'b01) begin
 
-            X_p[0] <= -Yin_scaled;
-            Y_p[0] <=  Xin_scaled;
-            Z_p[0] <= {2'b00, angle_reg[29:0]};
+            X_p[0] <= Ys_sub - Ys_add;
+            Y_p[0] <= Xs_add - Xs_sub;
+            Z_p[0] <= {2'b00, angle_1[29:0]};
 
         end
 
         else begin
 
-            X_p[0] <=  Yin_scaled;
-            Y_p[0] <= -Xin_scaled;
-            Z_p[0] <= {2'b11, angle_reg[29:0]};
+            X_p[0] <= Ys_add - Ys_sub;
+            Y_p[0] <= Xs_sub - Xs_add;
+            Z_p[0] <= {2'b11, angle_1[29:0]};
 
         end
 
-        // stages 2 .. 15: one CORDIC iteration each
+        // stages 3 .. 16: one CORDIC iteration each
         for (k = 1; k < N_ITER; k = k + 1) begin
 
             tag_p[k] <= tag_p[k-1];
@@ -274,7 +283,7 @@ module cordic_pipelined #(
 
         end
 
-        // stage 16: last iteration and output saturation
+        // stage 17: last iteration and output saturation
         out_tag <= tag_p[N_ITER-1];
         Xout    <= resize_output(X_next[N_ITER-1]);
         Yout    <= resize_output(Y_next[N_ITER-1]);
