@@ -413,6 +413,53 @@ That is one spin update per clock, about 3 × 10⁸ per second. For
 meaningful dynamics at this size, set γ to about 1/N (see the γ note under
 the scalable design).
 
+## Comparison with published hardware
+
+How the Cyclone 10 GX estimate above compares with published FPGA and chip
+Ising solvers. Figures for the other machines are from their papers and
+press material; figures for this design are estimates.
+
+| | Hardware | Coupling | Spins | Work per clock |
+|---|---|---|---|---|
+| **This design** (estimate) | One mid-range FPGA (Cyclone 10 GX) | Rank 1 only (J<sub>ij</sub> = a<sub>i</sub> a<sub>j</sub>) | About 49,000 (weights) or 60,000 | 1 spin update, about 3 × 10⁸ per second |
+| **Toshiba simulated bifurcation machine** ([Kashimata et al.](https://arxiv.org/abs/2311.17370)) | One or more FPGAs | Dense, any J | Thousands per FPGA; 32,768 on 8 FPGAs | Thousands of multiply-adds (8,192 per chip in one account) |
+| **Sparse p-bit Ising machine** ([Aadit et al., Nature Electronics 2022](https://arxiv.org/abs/2110.02481)) | FPGA | Sparse, any J | Thousands per FPGA; about a million on 18 FPGAs ([thesis](https://www.ece.ucsb.edu/events/all/2025/oct-23-thu-230pm-extreme-scale-ising-machines-distributed-p-computers-navid-anjum)) | Every p-bit of one colour group updated at once; about 10⁶ times faster than Gibbs sampling on a CPU |
+| **Hitachi CMOS annealer** | Custom chip (an FPGA version also exists) | Sparse, up to 5 neighbours | About 20,000 | All spins in parallel |
+
+- **The spin counts aren't comparable.** This design reaches 49,000 spins
+  only because rank-1 coupling needs no stored J matrix. The other machines
+  store a general J, and that storage is what limits them. With a dense
+  16-bit J, the Cyclone 10 GX's 11.7 Mb of block RAM would hold only about
+  900–1,200 spins.
+- **They do far more work per clock.** This design pushes one spin through
+  one shared pipeline per clock. The other machines run hundreds to
+  thousands of units in parallel, so they do roughly 100 to 10,000 times
+  more work per clock, usually on larger FPGAs.
+- **Against a CPU, the gain is small for now.** Rank-1 coupling makes each
+  layer O(N) on a CPU too. One CPU core could run the same 49,000-spin,
+  2-layer case in roughly a millisecond, so the FPGA is about 1 to a few
+  times faster than one core. The other machines win because their problems
+  need O(N²) work per step for dense J, or O(edges) for sparse J, and that
+  is where parallel hardware pays off.
+- **Solution quality is a separate question.** MF-AOA uses a few
+  deterministic layers, while simulated bifurcation and p-bit machines
+  iterate thousands of steps. We haven't found a published comparison of
+  MF-AOA against either on solution quality.
+
+What would close the gap:
+
+1. **More pipelines.** Logic is only about 7% used, so about 8 copies of the
+   pipeline would fit. That gives 8 times the throughput, or evaluates 8
+   (γ, β) settings at once, which helps because MF-AOA needs γ and β
+   optimized.
+2. **General sparse J,** with many parallel multiply-add units. This is
+   where FPGAs beat CPUs.
+3. **A host link,** to load γ, β and the weights and read back the final
+   spins.
+
+For an overview of the field, see the review [Ising machines as hardware
+solvers of combinatorial optimization problems](https://arxiv.org/abs/2204.00276).
+
 ## Simulation
 
 `sh sim/run_sims.sh` (needs Icarus Verilog and Python 3) runs these checks:
