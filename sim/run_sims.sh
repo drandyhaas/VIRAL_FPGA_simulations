@@ -27,16 +27,22 @@ iverilog -g2005 -o build/tb_compare_original \
 vvp -n build/tb_compare_original
 
 run_n_spin() {
-	n=$1; layers=$2; pattern=$3; tol=${4:-0.01}; gamma_lo=${5:-0}
+	n=$1; layers=$2; pattern=$3; tol=${4:-0.01}; gamma_lo=${5:-0}; weights=${6:-}
 	init="build/spin_init_${n}_${pattern}.hex"
-	echo "--- $n spins, $layers layers, $pattern initial state, gamma low bits $gamma_lo"
+	wfile=""
+	echo "--- $n spins, $layers layers, $pattern initial state, gamma low bits $gamma_lo, weights ${weights:-none}"
 	python3 ../gen_spin_init.py "$n" --pattern "$pattern" -o "$init"
+	if [ -n "$weights" ]; then
+		wfile="build/weights_${n}_${weights}.hex"
+		python3 ../gen_weights.py "$n" --pattern "$weights" -o "$wfile"
+	fi
 	iverilog -g2005 -o "build/tb_n_spin_${n}" \
 		-Ptb_VIRAL_n_spin.N_SPINS="$n" \
 		-Ptb_VIRAL_n_spin.N_LAYERS="$layers" \
 		-Ptb_VIRAL_n_spin.INIT_FILE="\"$init\"" \
 		-Ptb_VIRAL_n_spin.FLOAT_TOL="$tol" \
 		-Ptb_VIRAL_n_spin.GAMMA_LO="$gamma_lo" \
+		-Ptb_VIRAL_n_spin.WEIGHT_FILE="\"$wfile\"" \
 		$SRC tb_VIRAL_n_spin.v
 	vvp -n "build/tb_n_spin_${n}"
 }
@@ -57,6 +63,11 @@ run_n_spin 1000 2 random 0.05
 run_n_spin 10   4 alternating 0.01 4660
 run_n_spin 100  4 random      0.01 43981
 run_n_spin 1000 2 random      0.05 4660
+# spin weights (number partitioning); "ones" must match no weights exactly
+run_n_spin 10   2 random      0.01 0     ones
+run_n_spin 10   4 alternating 0.01 4660  random
+run_n_spin 100  2 random      0.01 0     random
+run_n_spin 1000 2 random      0.05 43981 random
 
 echo
 echo "=== original architecture scaled to N spins (synth/VIRAL_n_spin_direct.v) vs new ==="

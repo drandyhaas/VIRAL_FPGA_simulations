@@ -5,10 +5,13 @@
 // Runs the design with N_SPINS spins and checks:
 //   1. final spins against a bit-exact reference built from N_SPINS copies of
 //      the original VIRAL_rotation_2 (iterative CORDIC), stepped layer by layer
-//   2. energy against sum_{i<j} z_i*z_j >>> 15, recomputed pair by pair,
+//   2. energy against sum_{i<j} w_i*w_j >>> 15, recomputed pair by pair,
 //      and the LEDs against that energy >>> LED_LSB, saturated to 8 bits
 //   3. final spins against a floating-point model of the same dynamics
 //   4. that a reset reloads the initial state (a second run gives the same result)
+//
+// WEIGHT_FILE gives the spin weights a_i (empty: all 1.0), and w_i = a_i * z_i
+// rounded to Q1.15, as in the design.
 //
 // GAMMA_LO, if nonzero, replaces the low 16 bits of every gamma from angle_lut
 // (whose entries all have zero low bits), to test the full 32-bit gamma.
@@ -18,6 +21,7 @@ module tb_VIRAL_n_spin;
 parameter N_SPINS   = 10;
 parameter N_LAYERS  = 2;
 parameter INIT_FILE = "build/spin_init_10.hex";
+parameter WEIGHT_FILE = "";
 parameter LED_LSB   = 8;
 parameter FLOAT_TOL = 0.01;
 parameter GAMMA_LO  = 0;
@@ -31,7 +35,8 @@ always #10 clk = ~clk;
 
 wire [7:0] led;
 
-VIRAL_n_spin #(.N_SPINS(N_SPINS), .N_LAYERS(N_LAYERS), .INIT_FILE(INIT_FILE), .LED_LSB(LED_LSB))
+VIRAL_n_spin #(.N_SPINS(N_SPINS), .N_LAYERS(N_LAYERS), .INIT_FILE(INIT_FILE),
+               .WEIGHT_FILE(WEIGHT_FILE), .LED_LSB(LED_LSB))
 	dut (.clk(clk), .reset(reset), .led(led));
 
 
@@ -57,6 +62,7 @@ wire signed [31:0] gamma_forced = gamma_tab[dut.angle_addr];
 // ---------------------------------------------------------------
 
 reg [47:0] init_state [0:N_SPINS-1];
+reg [15:0] weight     [0:N_SPINS-1];
 
 reg signed [15:0] ref_x [0:N_SPINS-1];
 reg signed [15:0] ref_y [0:N_SPINS-1];
@@ -102,14 +108,15 @@ endgenerate
 real fx [0:N_SPINS-1];
 real fy [0:N_SPINS-1];
 real fz [0:N_SPINS-1];
+real fa [0:N_SPINS-1];
 
 
 integer i, j, layer;
 integer errors = 0;
 
-reg signed [63:0] s_sum;
-reg signed [63:0] h;
-reg signed [63:0] prod;
+reg signed [127:0] s_sum;
+reg signed [127:0] h;
+reg signed [127:0] prod;
 reg signed [63:0] pair_sum;
 reg signed [63:0] led_value;
 reg [7:0]         led_want;
@@ -117,17 +124,29 @@ reg [7:0]         led_want;
 real fs, fg, fb, theta, x1, y1, err, max_err;
 
 
+// w_i = a_i * z_i, rounded to Q1.15
+function signed [63:0] w_of;
+	input [15:0] a;
+	input signed [15:0] z;
+	reg signed [63:0] p;
+	begin
+		p    = $signed({1'b0, a}) * z;
+		w_of = (p + 64'sd16384) >>> 15;
+	end
+endfunction
+
 task ref_layer;
 	input integer k;
 	begin
 		s_sum = 0;
 		for (i = 0; i < N_SPINS; i = i + 1)
-			s_sum = s_sum + ref_z[i];
+			s_sum = s_sum + w_of(weight[i], ref_z[i]);
 
 		for (i = 0; i < N_SPINS; i = i + 1) begin
-			// angle = gamma * h * 180 degrees, rounded: Q1.31 * Q1.15 >> 15
-			h    = s_sum - ref_z[i];
-			prod = (gamma_tab[k] * h + 64'sd16384) >>> 15;
+			// angle = gamma * a_i * (S - w_i) * 180 degrees, rounded:
+			// Q1.31 * Q.15 * Q1.15 >> 30
+			h    = s_sum - w_of(weight[i], ref_z[i]);
+			prod = (gamma_tab[k] * $signed({1'b0, weight[i]}) * h + (128'sd1 <<< 29)) >>> 30;
 			ref_angle_in[32*i +: 32] = prod[31:0];
 			ref_x_in[16*i +: 16]     = ref_x[i];
 			ref_y_in[16*i +: 16]     = ref_y[i];
@@ -162,10 +181,10 @@ task float_layer;
 
 		fs = 0.0;
 		for (i = 0; i < N_SPINS; i = i + 1)
-			fs = fs + fz[i];
+			fs = fs + fa[i] * fz[i];
 
 		for (i = 0; i < N_SPINS; i = i + 1) begin
-			theta = PI * fg * (fs - fz[i]);
+			theta = PI * fg * fa[i] * (fs - fa[i] * fz[i]);
 			x1    = fx[i] * $cos(theta) - fy[i] * $sin(theta);
 			y1    = fx[i] * $sin(theta) + fy[i] * $cos(theta);
 			fx[i] = x1;
@@ -178,7 +197,12 @@ endtask
 
 initial begin
 	$readmemh(INIT_FILE, init_state);
+	for (i = 0; i < N_SPINS; i = i + 1)
+		weight[i] = 16'h8000;
+	if (WEIGHT_FILE != "")
+		$readmemh(WEIGHT_FILE, weight);
 	for (i = 0; i < N_SPINS; i = i + 1) begin
+		fa[i] = weight[i] / 32768.0;
 		ref_x[i] = init_state[i][47:32];
 		ref_y[i] = init_state[i][31:16];
 		ref_z[i] = init_state[i][15:0];
@@ -228,7 +252,7 @@ initial begin
 	pair_sum = 0;
 	for (i = 0; i < N_SPINS; i = i + 1)
 		for (j = i + 1; j < N_SPINS; j = j + 1)
-			pair_sum = pair_sum + ref_z[i] * ref_z[j];
+			pair_sum = pair_sum + w_of(weight[i], ref_z[i]) * w_of(weight[j], ref_z[j]);
 	if ($signed(dut.total_energy) !== (pair_sum >>> 15)) begin
 		$display("  energy: got %0d, pairwise %0d", $signed(dut.total_energy), pair_sum >>> 15);
 		errors = errors + 1;
@@ -274,8 +298,8 @@ initial begin
 		end
 	end
 
-	$display("N_SPINS=%0d N_LAYERS=%0d GAMMA_LO=%h: %0d clocks, energy %0d (%f), led %b, float model max error %f",
-		N_SPINS, N_LAYERS, GAMMA_LO[15:0], dut.final_time, $signed(dut.total_energy),
+	$display("N_SPINS=%0d N_LAYERS=%0d WEIGHT_FILE=%0s GAMMA_LO=%h: %0d clocks, energy %0d (%f), led %b, float model max error %f",
+		N_SPINS, N_LAYERS, (WEIGHT_FILE == "") ? "none" : WEIGHT_FILE, GAMMA_LO[15:0], dut.final_time, $signed(dut.total_energy),
 		$signed(dut.total_energy) / 32768.0, led, max_err);
 
 	if (errors == 0)

@@ -1,13 +1,15 @@
 module spin_memory #(
 	parameter N_SPINS   = 3,
 	parameter IDX_W     = 2,
-	parameter INIT_FILE = "spin_init_3.hex"
+	parameter INIT_FILE = "spin_init_3.hex",
+	parameter WEIGHT_FILE = ""
 )(
 	input clk,
 
 	input  wire [IDX_W-1:0] rd_addr,
 	output reg  [47:0]      rom_q,		// initial state of spin rd_addr
 	output reg  [47:0]      ram_q,		// current state of spin rd_addr
+	output reg  [15:0]      wt_q,		// weight of spin rd_addr
 
 	input  wire             wr_en,
 	input  wire [IDX_W-1:0] wr_addr,
@@ -17,10 +19,13 @@ module spin_memory #(
 // Spin state storage for VIRAL_n_spin. Each word is {x, y, z}.
 // init_rom holds the initial state (from INIT_FILE), spin_mem the current
 // state. Both map to block RAM (M9K on Cyclone IV, M20K on Cyclone 10 GX).
+// weight_rom holds the spin weights from WEIGHT_FILE (one line per spin, 4 hex
+// digits, unsigned with 15 fractional bits: 8000 = 1.0). With no
+// WEIGHT_FILE every weight is 1.0 and no memory is used.
 //
-// Read latency: 4 clocks from rd_addr to rom_q / ram_q. A write is stored
-// 2 clocks after wr_en. The extra registers are for large N_SPINS, where
-// each memory is many blocks spread over the chip:
+// Read latency: 4 clocks from rd_addr to rom_q / ram_q / wt_q. A write is
+// stored 2 clocks after wr_en. The extra registers are for large N_SPINS,
+// where each memory is many blocks spread over the chip:
 //   - rd_addr and the write inputs are registered first (maxfan lets
 //     Quartus duplicate those registers to drive all the blocks)
 //   - the read address register and the output register sit inside each
@@ -65,5 +70,24 @@ always @(posedge clk) begin
 	ram_out <= ram_rd;
 	ram_q   <= ram_out;
 end
+
+generate
+	if (WEIGHT_FILE == "") begin : unit_weights
+		always @(posedge clk)
+			wt_q <= 16'h8000;
+	end else begin : weights
+		reg [15:0] weight_rom [0:N_SPINS-1];
+		reg [15:0] wt_rd;
+		reg [15:0] wt_out;
+
+		initial $readmemh(WEIGHT_FILE, weight_rom);
+
+		always @(posedge clk) begin
+			wt_rd  <= weight_rom[rd_addr_q];
+			wt_out <= wt_rd;
+			wt_q   <= wt_out;
+		end
+	end
+endgenerate
 
 endmodule
