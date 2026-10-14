@@ -22,7 +22,7 @@ RESULTS=${RESULTS:-build/results.md}
 
 R=..
 ORIG="$R/angle_lut.v $R/cordic_iterative.v $R/VIRAL_rotation_2.v"
-NEW="$R/angle_lut.v $R/cordic_pipelined.v $R/VIRAL_rotation_pipe.v $R/VIRAL_n_spin.v"
+NEW="$R/angle_lut.v $R/cordic_pipelined.v $R/VIRAL_rotation_pipe.v $R/serial_mult.v $R/VIRAL_n_spin.v"
 
 CONFIGS=${*:-"two_spin:2 three_spin:3 direct:4 direct:10 direct:20 direct:50 new:3 new:10 new:100 new:1000"}
 

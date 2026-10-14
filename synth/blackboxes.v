@@ -17,12 +17,14 @@ endmodule
 module spin_memory #(
 	parameter N_SPINS   = 3,
 	parameter IDX_W     = 2,
-	parameter INIT_FILE = ""
+	parameter INIT_FILE = "",
+	parameter WEIGHT_FILE = ""
 )(
 	input clk,
 	input  [IDX_W-1:0] rd_addr,
 	output [47:0]      rom_q,
 	output [47:0]      ram_q,
+	output [15:0]      wt_q,
 	input              wr_en,
 	input  [IDX_W-1:0] wr_addr,
 	input  [47:0]      wr_data
